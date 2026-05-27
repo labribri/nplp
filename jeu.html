@@ -21,4 +21,231 @@
         .result { font-size: 1.3em; font-weight: bold; margin-top: 25px; text-align: center; }
         .success { color: #00ff66; }
         .error { color: #ff3333; }
-        #playerContainer { margin
+        #playerContainer { margin: 15px 0; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Entraînement NPLP 🎤</h1>
+    <div id="songMeta" class="meta">Initialisation du système...</div>
+
+    <div id="playerContainer">
+        <div id="ytPlayer"></div>
+    </div>
+
+    <div class="karaoke-box" id="karaokeBox">
+        <div id="lyricsContainer" style="width: 100%;"></div>
+        <div id="targetLine" class="line target-line"></div>
+    </div>
+
+    <button id="btnAction" onclick="chargerNouvelleChanson()" disabled>Charger une chanson au hasard</button>
+
+    <div id="inputBox" class="input-box">
+        <input type="text" id="userLyrics" placeholder="Tapez les paroles manquantes ici..." autocomplete="off">
+        <button onclick="validerParoles()">Valider</button>
+    </div>
+
+    <div id="resultBox" class="result"></div>
+</div>
+
+<script src="https://www.youtube.com/iframe_api"></script>
+
+<script>
+const SHEET_URL = 'https://docs.google.com/spreadsheets/d/1-1u58zeeuZDtx5l23sfZeLpryHYqwIjuoC92hSA1uNg/gviz/tq?tqx=out:json';
+
+let baseDeDonneesChansons = [];
+let player;
+let indexCoupure = 0;
+let tempsCoupure = 0;
+let phraseATrouver = "";
+let parolesSynchronisees = [];
+let intervalleChrono;
+let apiYouTubePrete = false;
+
+fetch(SHEET_URL)
+    .then(res => res.text())
+    .then(txt => {
+        const json = JSON.parse(txt.substr(47).slice(0, -2));
+        const lignes = json.table.rows;
+        
+        lignes.forEach(ligne => {
+            // Lecture adaptée aux nouvelles colonnes (B=Titre [1], C=Artiste [2], D=Lien [3], F=Syncro [5])
+            if(ligne.c && ligne.c[1] && ligne.c[5]) {
+                baseDeDonneesChansons.push({
+                    titre: ligne.c[1] ? ligne.c[1].v : "Titre inconnu",
+                    artiste: ligne.c[2] ? ligne.c[2].v : "Artiste inconnu",
+                    lienAudio: ligne.c[3] ? ligne.c[3].v : "",
+                    parolesBrutes: ligne.c[5] ? ligne.c[5].v : ""
+                });
+            }
+        });
+        
+        if (baseDeDonneesChansons.length === 0) {
+            document.getElementById('songMeta').innerText = "Aucune chanson synchronisée trouvée. Vérifiez que la colonne F contient bien des balises [MM:SS].";
+        } else {
+            document.getElementById('songMeta').innerText = `${baseDeDonneesChansons.length} chansons prêtes dans votre répertoire Sheets !`;
+            verifierActivationBouton();
+        }
+    })
+    .catch(err => {
+        document.getElementById('songMeta').innerText = "Erreur de lecture du Google Sheets. Vérifiez le partage.";
+        console.error(err);
+    });
+
+function onYouTubeIframeAPIReady() {
+    apiYouTubePrete = true;
+    verifierActivationBouton();
+}
+
+function verifierActivationBouton() {
+    if (apiYouTubePrete && baseDeDonneesChansons.length > 0) {
+        document.getElementById('btnAction').disabled = false;
+    }
+}
+
+function extraireIdYouTube(url) {
+    if (!url) return "MzvlalfN0Es"; 
+    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+    const match = url.match(regExp);
+    return (match && match[2].length == 11) ? match[2] : "MzvlalfN0Es";
+}
+
+function analyserParoles(texteBrut) {
+    const lignes = texteBrut.split('\n');
+    const resultat = [];
+    lignes.forEach(l => {
+        const match = l.match(/\[(\d{2}):(\d{2})\](.*)/);
+        if (match) {
+            const minutes = parseInt(match[1]);
+            const secondes = parseInt(match[2]);
+            const tempsTotal = (minutes * 60) + secondes;
+            const texte = match[3].trim();
+            if (texte.length > 0) {
+                resultat.push({ temps: tempsTotal, texte: texte });
+            }
+        }
+    });
+    return resultat;
+}
+
+function chargerNouvelleChanson() {
+    clearInterval(intervalleChrono);
+    
+    const chansonChoisie = baseDeDonneesChansons[Math.floor(Math.random() * baseDeDonneesChansons.length)];
+    
+    document.getElementById('resultBox').innerText = "";
+    document.getElementById('userLyrics').value = "";
+    document.getElementById('targetLine').style.display = "none";
+    document.getElementById('inputBox').style.display = "none";
+    document.getElementById('lyricsContainer').innerHTML = "";
+    document.getElementById('songMeta').innerText = `👉 "${chansonChoisie.titre}" - ${chansonChoisie.artiste}`;
+
+    parolesSynchronisees = analyserParoles(chansonChoisie.parolesBrutes);
+    
+    if (parolesSynchronisees.length < 3) {
+        alert("Les paroles de cette chanson ne sont pas correctement synchronisées avec les balises [MM:SS].");
+        return;
+    }
+
+    indexCoupure = Math.floor(Math.random() * (parolesSynchronisees.length - 2)) + 2;
+    tempsCoupure = parolesSynchronisees[indexCoupure].temps;
+    phraseATrouver = parolesSynchronisees[indexCoupure].texte;
+
+    const videoId = extraireIdYouTube(chansonChoisie.lienAudio);
+
+    if (!player) {
+        player = new YT.Player('ytPlayer', {
+            height: '200',
+            width: '100%',
+            videoId: videoId,
+            playerVars: { 'autoplay': 1, 'controls': 0, 'rel': 0 },
+            events: { 'onReady': démarrerChrono, 'onStateChange': (e) => { if(e.data === YT.PlayerState.PLAYING) démarrerChrono(); } }
+        });
+    } else {
+        player.loadVideoById(videoId);
+        player.unMute();
+        démarrerChrono();
+    }
+}
+
+function démarrerChrono() {
+    clearInterval(intervalleChrono);
+    intervalleChrono = setInterval(surveillerMusique, 100);
+}
+
+function surveillerMusique() {
+    if (!player || typeof player.getCurrentTime !== 'function') return;
+    
+    const tempsActuel = player.getCurrentTime();
+    const container = document.getElementById('lyricsContainer');
+
+    if (tempsActuel >= tempsCoupure) {
+        clearInterval(intervalleChrono);
+        player.mute(); 
+        
+        container.innerHTML = "";
+        if (indexCoupure > 0) {
+            const avant = document.createElement('div');
+            avant.className = "line past-line";
+            avant.innerText = parolesSynchronisees[indexCoupure - 1].texte;
+            container.appendChild(avant);
+        }
+
+        const nbrMots = phraseATrouver.split(/\s+/).length;
+        let tirets = Array(nbrMots).fill("______").join(" ");
+        
+        const targetElement = document.getElementById('targetLine');
+        targetElement.innerText = `🚨 C'EST À VOUS ! COMPLÉTEZ : \n${tirets} (${nbrMots} mots)`;
+        targetElement.style.display = "block";
+        
+        document.getElementById('inputBox').style.display = "block";
+        return;
+    }
+
+    container.innerHTML = "";
+    let derniereLigneAffichee = -1;
+
+    parolesSynchronisees.forEach((ligne, idx) => {
+        if (idx < indexCoupure && tempsActuel >= ligne.temps) {
+            derniereLigneAffichee = idx;
+        }
+    });
+
+    if (derniereLigneAffichee !== -1) {
+        if (derniereLigneAffichee > 0) {
+            const divAncienne = document.createElement('div');
+            divAncienne.className = "line past-line";
+            divAncienne.innerText = parolesSynchronisees[derniereLigneAffichee - 1].texte;
+            container.appendChild(divAncienne);
+        }
+
+        const divActuelle = document.createElement('div');
+        divActuelle.className = "line current-line";
+        divActuelle.innerText = parolesSynchronisees[derniereLigneAffichee].texte;
+        container.appendChild(divActuelle);
+    } else {
+        const divIntro = document.createElement('div');
+        divIntro.className = "line current-line";
+        divIntro.innerText = "🎵 (Introduction musicale...) 🎵";
+        container.appendChild(divIntro);
+    }
+}
+
+function validerParoles() {
+    const nettoyerTexte = str => str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g,"").trim();
+    const saisie = nettoyerTexte(document.getElementById('userLyrics').value);
+    const solution = nettoyerTexte(phraseATrouver);
+    const resultBox = document.getElementById('resultBox');
+
+    if (saisie === solution) {
+        resultBox.innerHTML = `<span class="success">Cruella est verte ! 🟢 C'est correct !</span>`;
+        player.unMute();
+    } else {
+        resultBox.innerHTML = `<span class="error">C'est la sonnerie ! 🔴 La phrase était : "${phraseATrouver}"</span>`;
+    }
+}
+</script>
+
+</body>
+</html>

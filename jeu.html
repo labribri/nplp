@@ -70,7 +70,6 @@ fetch(SHEET_URL)
         const lignes = json.table.rows;
         
         lignes.forEach(ligne => {
-            // Lecture adaptée aux nouvelles colonnes (B=Titre [1], C=Artiste [2], D=Lien [3], F=Syncro [5])
             if(ligne.c && ligne.c[1] && ligne.c[5]) {
                 baseDeDonneesChansons.push({
                     titre: ligne.c[1] ? ligne.c[1].v : "Titre inconnu",
@@ -82,14 +81,14 @@ fetch(SHEET_URL)
         });
         
         if (baseDeDonneesChansons.length === 0) {
-            document.getElementById('songMeta').innerText = "Aucune chanson synchronisée trouvée. Vérifiez que la colonne F contient bien des balises [MM:SS].";
+            document.getElementById('songMeta').innerText = "Aucune chanson synchronisée trouvée. Vérifiez la colonne F.";
         } else {
-            document.getElementById('songMeta').innerText = `${baseDeDonneesChansons.length} chansons prêtes dans votre répertoire Sheets !`;
+            document.getElementById('songMeta').innerText = `${baseDeDonneesChansons.length} chansons chargées depuis votre Google Sheets !`;
             verifierActivationBouton();
         }
     })
     .catch(err => {
-        document.getElementById('songMeta').innerText = "Erreur de lecture du Google Sheets. Vérifiez le partage.";
+        document.getElementById('songMeta').innerText = "Erreur de lecture du Google Sheets.";
         console.error(err);
     });
 
@@ -105,28 +104,39 @@ function verifierActivationBouton() {
 }
 
 function extraireIdYouTube(url) {
-    if (!url) return "MzvlalfN0Es"; 
+    if (!url) return "MzvlalfN0Es";
+    let urlString = (typeof url === 'string') ? url : (url.v ? url.v : "");
+    urlString = urlString.trim();
     const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
-    const match = url.match(regExp);
-    return (match && match[2].length == 11) ? match[2] : "MzvlalfN0Es";
+    const match = urlString.match(regExp);
+    if (match && match[2].length === 11) return match[2];
+    if (urlString.length === 11) return urlString;
+    return "MzvlalfN0Es"; 
 }
 
+// Analyseur de paroles amélioré et ultra-robuste pour Google Sheets
 function analyserParoles(texteBrut) {
-    const lignes = texteBrut.split('\n');
+    if (!texteBrut) return [];
+    
+    // Nettoyage des retours à la ligne système (\r\n ou \n)
+    const lignes = texteBrut.replace(/\r\n/g, '\n').split('\n');
     const resultat = [];
+    
     lignes.forEach(l => {
-        const match = l.match(/\[(\d{2}):(\d{2})\](.*)/);
+        // Détection flexible de la balise [MM:SS]
+        const match = l.match(/\[(\d{1,2}):(\d{2})\](.*)/);
         if (match) {
             const minutes = parseInt(match[1]);
             const secondes = parseInt(match[2]);
             const tempsTotal = (minutes * 60) + secondes;
             const texte = match[3].trim();
-            if (texte.length > 0) {
-                resultat.push({ temps: tempsTotal, texte: texte });
-            }
+            
+            resultat.push({ temps: tempsTotal, texte: texte });
         }
     });
-    return resultat;
+    
+    // Tri automatique par ordre chronologique, juste au cas où
+    return resultat.sort((a, b) => a.temps - b.temps);
 }
 
 function chargerNouvelleChanson() {
@@ -143,12 +153,13 @@ function chargerNouvelleChanson() {
 
     parolesSynchronisees = analyserParoles(chansonChoisie.parolesBrutes);
     
-    if (parolesSynchronisees.length < 3) {
-        alert("Les paroles de cette chanson ne sont pas correctement synchronisées avec les balises [MM:SS].");
+    if (parolesSynchronisees.length < 2) {
+        alert("Erreur de lecture des balises de temps. Vérifiez le format [MM:SS] dans la colonne F.");
         return;
     }
 
-    indexCoupure = Math.floor(Math.random() * (parolesSynchronisees.length - 2)) + 2;
+    // Sélection d'une coupure au hasard parmi les lignes disponibles
+    indexCoupure = Math.floor(Math.random() * (parolesSynchronisees.length - 1)) + 1;
     tempsCoupure = parolesSynchronisees[indexCoupure].temps;
     phraseATrouver = parolesSynchronisees[indexCoupure].texte;
 
@@ -156,10 +167,10 @@ function chargerNouvelleChanson() {
 
     if (!player) {
         player = new YT.Player('ytPlayer', {
-            height: '200',
+            height: '240',
             width: '100%',
             videoId: videoId,
-            playerVars: { 'autoplay': 1, 'controls': 0, 'rel': 0 },
+            playerVars: { 'autoplay': 1, 'controls': 1, 'rel': 0 },
             events: { 'onReady': démarrerChrono, 'onStateChange': (e) => { if(e.data === YT.PlayerState.PLAYING) démarrerChrono(); } }
         });
     } else {
@@ -192,7 +203,7 @@ function surveillerMusique() {
             container.appendChild(avant);
         }
 
-        const nbrMots = phraseATrouver.split(/\s+/).length;
+        const nbrMots = phraseATrouver.split(/\s+/).filter(m => m.length > 0).length;
         let tirets = Array(nbrMots).fill("______").join(" ");
         
         const targetElement = document.getElementById('targetLine');

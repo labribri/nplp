@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Entraînement NPLP 🎤</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #1a1a1a; color: #fff; text-align: center; padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; background: #2a2a2a; padding: 30px; border-radius: 15px; box-shadow: 0 8px 16px rgba(0,0,0,0.3); }
+        h1 { color: #00ffcc; font-size: 2.5em; margin-bottom: 5px; }
+        .meta { color: #aaa; font-style: italic; margin-bottom: 20px; min-height: 1.5em; }
+        .karaoke-box { background: #111; padding: 25px; border-radius: 10px; min-height: 220px; max-height: 350px; overflow-y: auto; text-align: center; margin-bottom: 30px; border: 2px solid #444; display: flex; flex-direction: column; justify-content: center; align-items: center; }
+        .line { font-size: 1.4em; margin: 10px 0; min-height: 1.5em; line-height: 1.4; transition: all 0.3s; width: 100%; }
+        .past-line { color: #555; font-size: 1.1em; }
+        .current-line { color: #00ffcc; font-weight: bold; font-size: 1.8em; text-shadow: 0 0 10px rgba(0,255,204,0.5); }
+        .target-line { color: #ffcc00; font-weight: bold; letter-spacing: 2px; font-size: 1.6em; border-top: 1px dashed #444; padding-top: 15px; margin-top: 15px; display: none; }
+        button { background: #00ffcc; color: #111; border: none; padding: 12px 30px; font-size: 1.1em; font-weight: bold; border-radius: 25px; cursor: pointer; transition: all 0.2s; margin: 10px; }
+        button:hover { background: #00e6b8; transform: scale(1.05); }
+        button:disabled { background: #444; color: #777; cursor: not-allowed; transform: none; }
+        .input-box { display: none; margin-top: 20px; }
+        input[type="text"] { width: 70%; padding: 12px; font-size: 1.1em; border-radius: 5px; border: none; margin-right: 10px; background: #fff; color: #000; }
+        .result { font-size: 1.3em; font-weight: bold; margin-top: 25px; text-align: center; }
+        .success { color: #00ff66; }
+        .error { color: #ff3333; }
+        #playerContainer { margin: 15px 0; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Entraînement NPLP 🎤</h1>
+    <div id="songMeta" class="meta">Initialisation du système...</div>
+
+    <div id="playerContainer">
+        <div id="ytPlayer"></div>
+    </div>
+
+    <div class="karaoke-box" id="karaokeBox">
+        <div id="lyricsContainer" style="width: 100%;"></div>
+        <div id="targetLine" class="line target-line"></div>
+    </div>
+
+    <button id="btnAction" onclick="chargerNouvelleChanson()" disabled>Charger une chanson au hasard</button>
+
+    <div id="inputBox" class="input-box">
+        <input type="text" id="userLyrics" placeholder="Tapez les paroles manquantes ici..." autocomplete="off">
+        <button onclick="validerParoles()">Valider</button>
+    </div>
+
+    <div id="resultBox" class="result"></div>
+</div>
+
+<script src="https://www.youtube.com/iframe_api"></script>
+
+<script>
+// LIEN DE VOTRE GOOGLE SHEETS
+// Remplacez simplement les lettres entre /d/ et /gviz/ par l'identifiant de votre propre Google Sheet si nécessaire
+const SHEET_URL = 'https://docs.google.com/spreadsheets/d/1vCg-478_D-L2U_h3xS3e2oD_J5D_bM_vHInwXj7YmUI/gviz/tq?tqx=out:json';
+
+let baseDeDonneesChansons = [];
+let player;
+let indexCoupure = 0;
+let tempsCoupure = 0;
+let phraseATrouver = "";
+let parolesSynchronisees = [];
+let intervalleChrono;
+let apiYouTubePrete = false;
+
+// Charger les données du Google Sheets automatiquement
+fetch(SHEET_URL)
+    .then(res => res.text())
+    .then(txt => {
+        // Nettoyage du format JSON envoyé par Google Sheets
+        const json = JSON.parse(txt.substr(47).slice(0, -2));
+        const lignes = json.table.rows;
+        
+        lignes.forEach(ligne => {
+            if(ligne.c && ligne.c[0] && ligne.c[5]) {
+                baseDeDonneesChansons.push({
+                    titre: ligne.c[0] ? ligne.c[0].v : "Titre inconnu",
+                    artiste: ligne.c[1] ? ligne.c[1].v : "Artiste inconnu",
+                    lienAudio: ligne.c[3] ? ligne.c[3].v : "",
+                    parolesBrutes: ligne.c[5] ? ligne.c[5].v : ""
+                });
+            }
+        });
+        
+        document.getElementById('songMeta').innerText = `${baseDeDonneesChansons.length} chansons prêtes dans votre répertoire Sheets !`;
+        verifierActivationBouton();
+    })
+    .catch(err => {
+        document.getElementById('songMeta').innerText = "Erreur de connexion au Google Sheets. Vérifiez le partage.";
+        console.error(err);
+    });
+
+function onYouTubeIframeAPIReady() {
+    apiYouTubePrete = true;
+    verifierActivationBouton();
+}
+
+function verifierActivationBouton() {
+    if (apiYouTubePrete && baseDeDonneesChansons.length > 0) {
+        document.getElementById('btnAction').disabled = false;
+    }
+}
+
+function extraireIdYouTube(url) {
+    if (!url) return "MzvlalfN0Es"; // Par défaut Cabrel si vide
+    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+    const match = url.match(regExp);
+    return (match && match[2].length == 11) ? match[2] : "MzvlalfN0Es";
+}
+
+function analyserParoles(texteBrut) {
+    const lignes = texteBrut.split('\n');
+    const resultat = [];
+    lignes.forEach(l => {
+        const match = l.match(/\[(\d{2}):(\d{2})\](.*)/);
+        if (match) {
+            const minutes = parseInt(match[1]);
+            const secondes = parseInt(match[2]);
+            const tempsTotal = (minutes * 60) + secondes;
+            const texte = match[3].trim();
+            if (texte.length > 0) {
+                resultat.push({ temps: tempsTotal, texte: texte });
+            }
+        }
+    });
+    return resultat;
+}
+
+function chargerNouvelleChanson() {
+    clearInterval(intervalleChrono);
+    
+    // Sélectionner une chanson au hasard dans votre Google Sheets
+    const chansonChoisie = baseDeDonneesChansons[Math.floor(Math.random() * baseDeDonneesChansons.length)];
+    
+    document.getElementById('resultBox').innerText = "";
+    document.getElementById('userLyrics').value = "";
+    document.getElementById('targetLine').style.display = "none";
+    document.getElementById('inputBox').style.display = "none";
+    document.getElementById('lyricsContainer').innerHTML = "";
+    document.getElementById('songMeta').innerText = `👉 "${chansonChoisie.titre}" - ${chansonChoisie.artiste}`;
+
+    parolesSynchronisees = analyserParoles(chansonChoisie.parolesBrutes);
+    
+    if (parolesSynchronisees.length < 3) {
+        alert("Les paroles de cette chanson ne sont pas correctement synchronisées avec les balises [MM:SS]. Try again !");
+        return;
+    }
+
+    // Définir le piège au hasard
+    indexCoupure = Math.floor(Math.random() * (parolesSynchronisees.length - 2)) + 2;
+    tempsCoupure = parolesSynchronisees[indexCoupure].temps;
+    phraseATrouver = parolesSynchronisees[indexCoupure].texte;
+
+    const videoId = extraireIdYouTube(chansonChoisie.lienAudio);
+
+    // Charger ou changer la vidéo dans le lecteur
+    if (!player) {
+        player = new YT.Player('ytPlayer', {
+            height: '200',
+            width: '100%',
+            videoId: videoId,
+            playerVars: { 'autoplay': 1, 'controls': 0, 'rel': 0 },
+            events: { 'onReady': démarrerChrono, 'onStateChange': (e) => { if(e.data === YT.PlayerState.PLAYING) démarrerChrono(); } }
+        });
+    } else {
+        player.loadVideoById(videoId);
+        player.unMute();
+        démarrerChrono();
+    }
+}
+
+function démarrerChrono() {
+    clearInterval(intervalleChrono);
+    intervalleChrono = setInterval(surveillerMusique, 100);
+}
+
+function surveillerMusique() {
+    if (!player || typeof player.getCurrentTime !== 'function') return;
+    
+    const tempsActuel = player.getCurrentTime();
+    const container = document.getElementById('lyricsContainer');
+
+    // Moment fatidique : Cruella coupe le son !
+    if (tempsActuel >= tempsCoupure) {
+        clearInterval(intervalleChrono);
+        player.mute(); 
+        
+        container.innerHTML = "";
+        if (indexCoupure > 0) {
+            const avant = document.createElement('div');
+            avant.className = "line past-line";
+            avant.innerText = parolesSynchronisees[indexCoupure - 1].texte;
+            container.appendChild(avant);
+        }
+
+        const nbrMots = phraseATrouver.split(/\s+/).length;
+        let tirets = Array(nbrMots).fill("______").join(" ");
+        
+        const targetElement = document.getElementById('targetLine');
+        targetElement.innerText = `🚨 C'EST À VOUS ! COMPLETÈZ : \n${tirets} (${nbrMots} mots)`;
+        targetElement.style.display = "block";
+        
+        document.getElementById('inputBox').style.display = "block";
+        return;
+    }
+
+    // Gestion de l'affichage Karaoké ligne par ligne
+    container.innerHTML = "";
+    let derniereLigneAffichee = -1;
+
+    parolesSynchronisees.forEach((ligne, idx) => {
+        if (idx < indexCoupure && tempsActuel >= ligne.temps) {
+            derniereLigneAffichee = idx;
+        }
+    });
+
+    if (derniereLigneAffichee !== -1) {
+        if (derniereLigneAffichee > 0) {
+            const divAncienne = document.createElement('div');
+            divAncienne.className = "line past-line";
+            divAncienne.innerText = parolesSynchronisees[derniereLigneAffichee - 1].texte;
+            container.appendChild(divAncienne);
+        }
+
+        const divActuelle = document.createElement('div');
+        divActuelle.className = "line current-line";
+        divActuelle.innerText = parolesSynchronisees[derniereLigneAffichee].texte;
+        container.appendChild(divActuelle);
+    } else {
+        const divIntro = document.createElement('div');
+        divIntro.className = "line current-line";
+        divIntro.innerText = "🎵 (Introduction musicale...) 🎵";
+        container.appendChild(divIntro);
+    }
+}
+
+function validerParoles() {
+    const nettoyerTexte = str => str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g,"").trim();
+    const saisie = nettoyerTexte(document.getElementById('userLyrics').value);
+    const solution = nettoyerTexte(phraseATrouver);
+    const resultBox = document.getElementById('resultBox');
+
+    if (saisie === solution) {
+        resultBox.innerHTML = `<span class="success">Cruella est verte ! 🟢 C'est correct !</span>`;
+        player.unMute();
+    } else {
+        resultBox.innerHTML = `<span class="error">C'est la sonnerie ! 🔴 La phrase était : "${phraseATrouver}"</span>`;
+    }
+}
+</script>
+
+</body>
+</html>
